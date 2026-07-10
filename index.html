@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Leitor DANFE & Roteirizador Mobile</title>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 15px; background-color: #f4f4f9; color: #333; -webkit-text-size-adjust: 100%; }
+        h1 { color: #0056b3; font-size: 22px; text-align: center; }
+        h2 { color: #333; font-size: 16px; margin-top: 20px; }
+        .btn { background-color: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; margin: 5px 0; display: block; width: 100%; text-align: center; box-sizing: border-box; }
+        .btn:active { opacity: 0.8; }
+        .btn-scan { background-color: #f39c12; font-weight: bold; }
+        .btn-maps { background-color: #28a745; font-weight: bold; margin-top: 20px; }
+        #reader { width: 100%; max-width: 100%; margin: 15px 0; border: 2px solid #007bff; border-radius: 8px; overflow: hidden; display: none; background-color: #000; }
+        .file-input-wrapper { margin: 15px 0; }
+        .table-responsive { width: 100%; overflow-x: auto; margin-top: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border-radius: 6px; }
+        table { width: 100%; border-collapse: collapse; background: white; min-width: 500px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; font-size: 14px; }
+        th { background-color: #f2f2f2; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+    </style>
+</head>
+<body>
+
+    <h1>Leitor de DANFE & Roteirizador</h1>
+    
+    <h2>1. Escanear Código de Barras</h2>
+    <button id="btnIniciarCamera" class="btn btn-scan" onclick="alternarCamera()">Iniciar Câmera</button>
+    <div id="reader"></div>
+    
+    <h2>2. Selecionar Pasta ou Arquivos XML</h2>
+    <div class="file-input-wrapper">
+        <label for="xmlFolder" class="btn">Carregar XMLs</label>
+        <input type="file" id="xmlFolder" webkitdirectory directory multiple accept=".xml,text/xml" style="display: none;" onchange="processarXMLs(this.files)">
+        <span id="fileCount" style="display:block; text-align:center; margin-top:5px; font-size:14px; color:#666;">Nenhum arquivo selecionado</span>
+    </div>
+
+    <h2>Listagem de Notas Fiscais</h2>
+    <div class="table-responsive">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nº NF</th>
+                    <th>Endereço Destinatário</th>
+                    <th>Download XML</th>
+                    <th>Chave de Acesso</th>
+                </tr>
+            </thead>
+            <tbody id="resultadoTabela">
+                </tbody>
+        </table>
+    </div>
+
+    <button class="btn btn-maps" onclick="gerarRotaMaps()">Abrir Rota no Google Maps</button>
+
+    <script>
+        const notasFiscais = {};
+        let html5Qrcode = null;
+        let cameraAtiva = false;
+
+        // --- 1. CONTROLE DA CÂMERA EM DISPOSITIVOS MÓVEIS ---
+        function alternarCamera() {
+            const readerDiv = document.getElementById("reader");
+            const btn = document.getElementById("btnIniciarCamera");
+
+            if (!html5Qrcode) {
+                html5Qrcode = new Html5Qrcode("reader");
+            }
+
+            if (!cameraAtiva) {
+                readerDiv.style.display = "block";
+                btn.innerText = "Parar Câmera";
+                btn.style.backgroundColor = "#e74c3c";
+
+                // Ajustes de foco e tamanho responsivo para telas de celular
+                const config = { 
+                    fps: 15, 
+                    qrbox: function(viewfinderWidth, viewfinderHeight) {
+                        // Cria uma tarja horizontal de leitura adaptável ao tamanho da tela do celular
+                        return { width: Math.floor(viewfinderWidth * 0.85), height: 120 };
+                    },
+                    formatsToSupport: [ Html5QrcodeSupportedFormats.CODE_128 ]
+                };
+
+                // 'facingMode: "environment"' força o uso da câmera TRASEIRA do celular
+                html5Qrcode.start(
+                    { facingMode: "environment" }, 
+                    config, 
+                    (decodedText) => {
+                        const chave = decodedText.replace(/\D/g, '');
+                        if (chave.length === 44) {
+                            adicionarChaveNaTabela(chave);
+                            // Opcional: emitir uma pequena vibração no celular ao ler com sucesso
+                            if (navigator.vibrate) navigator.vibrate(100);
+                        }
+                    },
+                    (errorMessage) => { /* Silencioso */ }
+                ).then(() => {
+                    cameraAtiva = true;
+                }).catch(err => {
+                    console.error(err);
+                    alert("Erro de permissão: Certifique-se de que está usando HTTPS e deu permissão à câmera.");
+                    resetarBotaoCamera();
+                });
+
+            } else {
+                html5Qrcode.stop().then(() => {
+                    resetarBotaoCamera();
+                }).catch(err => console.error(err));
+            }
+        }
+
+        function resetarBotaoCamera() {
+            const readerDiv = document.getElementById("reader");
+            const btn = document.getElementById("btnIniciarCamera");
+            readerDiv.style.display = "none";
+            btn.innerText = "Iniciar Câmera";
+            btn.style.backgroundColor = "#f39c12";
+            cameraAtiva = false;
+        }
+
+        // --- 2. GERENCIAMENTO DA TABELA ---
+        function adicionarChaveNaTabela(chave) {
+            if (notasFiscais[chave]) return; 
+
+            const numNF = parseInt(chave.substring(25, 34), 10);
+            
+            notasFiscais[chave] = {
+                chave: chave,
+                numNF: numNF,
+                endereco: "Aguardando XML..."
+            };
+
+            atualizarTabelaUI();
+        }
+
+        function atualizarTabelaUI() {
+            const tbody = document.getElementById("resultadoTabela");
+            tbody.innerHTML = "";
+
+            Object.values(notasFiscais).forEach(nota => {
+                const tr = document.createElement("tr");
+                
+                tr.innerHTML = `
+                    <td><strong>${nota.numNF}</strong></td>
+                    <td>${nota.endereco}</td>
+                    <td><a href="https://meudanfe.com.br/" target="_blank" style="color:#007bff; font-weight:bold;">Baixar</a></td>
+                    <td style="font-size: 11px; color: #666; word-break: break-all;">${nota.chave}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- 3. PROCESSAMENTO SEGURO DE ARQUIVOS (LIDA COM 'content://') ---
+        function processarXMLs(files) {
+            if (!files || files.length === 0) return;
+
+            // Filtra os arquivos de forma abrangente (por extensão ou tipo MIME retornado pelo Android)
+            const xmlFiles = Array.from(files).filter(file => {
+                return file.name.toLowerCase().endsWith('.xml') || file.type === "text/xml";
+            });
+
+            document.getElementById("fileCount").innerText = `${xmlFiles.length} arquivo(s) XML carregado(s).`;
+
+            xmlFiles.forEach(file => {
+                const reader = new FileReader();
+                // O FileReader resolve a URI interna 'content://' nativamente no navegador do celular
+                reader.onload = function(e) {
+                    parserXML(e.target.result);
+                };
+                reader.onerror = function(err) {
+                    console.error("Erro ao ler arquivo da memória do celular:", err);
+                };
+                reader.readAsText(file);
+            });
+        }
+
+        function parserXML(xmlText) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+            
+            let chaveNode = xmlDoc.getElementsByTagName("chNFe")[0];
+            if (!chaveNode) {
+                const infNFe = xmlDoc.getElementsByTagName("infNFe")[0];
+                if (infNFe) {
+                    let idAttr = infNFe.getAttribute("Id");
+                    if (idAttr) chaveNode = { textContent: idAttr.replace('NFe', '') };
+                }
+            }
+
+            if (chaveNode) {
+                const chave = chaveNode.textContent.trim();
+                
+                if (notasFiscais[chave]) {
+                    const enderDest = xmlDoc.getElementsByTagName("enderDest")[0];
+                    if (enderDest) {
+                        const xLgr = enderDest.getElementsByTagName("xLgr")[0]?.textContent || "";
+                        const nro = enderDest.getElementsByTagName("nro")[0]?.textContent || "";
+                        const cep = enderDest.getElementsByTagName("CEP")[0]?.textContent || "";
+                        
+                        notasFiscais[chave].endereco = `${xLgr}, ${nro} - CEP: ${cep}`;
+                        atualizarTabelaUI();
+                    }
+                }
+            }
+        }
+
+        // --- 4. ROTA INTELIGENTE (ABRE DIRETO NO APLICATIVO DO MAPS SE INSTALADO) ---
+        function gerarRotaMaps() {
+            const enderecosValidos = Object.values(notasFiscais)
+                .map(nota => nota.endereco)
+                .filter(end => end && end !== "Aguardando XML...");
+
+            if (enderecosValidos.length === 0) {
+                alert("Nenhum endereço disponível para gerar a rota.");
+                return;
+            }
+
+            // URL universal adaptada para disparar o aplicativo nativo do Google Maps no celular (iOS/Android)
+            const urlBase = "https://www.google.com/maps/dir/";
+            const destinosParam = enderecosValidos.map(end => encodeURIComponent(end)).join("/");
+            
+            window.open(`${urlBase}${destinosParam}`, '_blank');
+        }
+    </script>
+</body>
+</html>
