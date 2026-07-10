@@ -2,7 +2,8 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#14181d">
 <title>Leitor DANFE → Rota de Entrega</title>
 <style>
   :root{
@@ -23,7 +24,7 @@
   body{
     margin:0; background:var(--bg); color:var(--text);
     font-family:var(--sans); -webkit-font-smoothing:antialiased;
-    padding-bottom:100px;
+    padding-bottom:calc(100px + env(safe-area-inset-bottom));
   }
   .app{max-width:980px; margin:0 auto; padding:28px 18px 40px;}
   header{
@@ -60,7 +61,8 @@
     border-radius:10px; padding:14px; flex-direction:column; gap:10px;
   }
   #scannerBox.open{display:flex;}
-  #reader{width:100%; border-radius:8px; overflow:hidden; background:#000;}
+  #reader{width:100%; border-radius:8px; overflow:hidden; background:#000; max-height:340px;}
+  #reader video, #reader canvas, #reader img{width:100% !important; height:auto !important; max-height:340px; object-fit:cover;}
   .scan-status{font-size:12.5px; color:var(--text-dim); font-family:var(--mono); display:flex; align-items:center; gap:8px;}
   .pulse-dot{
     width:8px; height:8px; border-radius:50%; background:var(--text-dim); flex:none;
@@ -87,8 +89,11 @@
 
   #folderStatus{font-size:12px; color:var(--text-dim); padding-left:2px;}
 
-  .table-wrap{background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden;}
-  table{width:100%; border-collapse:collapse; font-size:13px;}
+  .table-wrap{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    overflow-x:auto; -webkit-overflow-scrolling:touch;
+  }
+  table{width:100%; min-width:680px; border-collapse:collapse; font-size:13px;}
   thead th{
     text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em;
     color:var(--text-dim); padding:10px 12px; border-bottom:1px solid var(--line);
@@ -127,11 +132,23 @@
 
   footer.bar{
     position:fixed; bottom:0; left:0; right:0; background:var(--panel);
-    border-top:1px solid var(--line); padding:12px 18px; display:flex;
-    justify-content:center; z-index:20;
+    border-top:1px solid var(--line); padding:12px 18px calc(12px + env(safe-area-inset-bottom));
+    display:flex; justify-content:center; z-index:20;
   }
-  footer.bar .inner{max-width:980px; width:100%; display:flex; gap:10px; align-items:center;}
+  footer.bar .inner{max-width:980px; width:100%; display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
   .count-pill{font-size:12px; color:var(--text-dim); margin-right:auto; font-family:var(--mono);}
+
+  @media (max-width: 560px){
+    .app{padding:20px 14px 30px;}
+    header{flex-direction:column; align-items:flex-start; gap:10px;}
+    footer.bar .inner{justify-content:space-between;}
+    .count-pill{width:100%; margin-right:0; order:-1; margin-bottom:2px;}
+    #btnClear{flex:1;}
+    #btnRoute{flex:2;}
+  }
+
+  .btn, .link-danfe, .row-remove, .copy-chave{min-height:38px;}
+  .row-remove, .copy-chave{min-height:auto;}
 
   .toast{
     position:fixed; top:16px; left:50%; transform:translateX(-50%);
@@ -184,7 +201,7 @@
     </button>
     <input type="file" id="folderInput" webkitdirectory directory multiple hidden accept=".xml">
     <div id="folderStatus"></div>
-    <p class="note">O endereço é montado a partir de <b>xLgr</b> + <b>nro</b> + <b>CEP</b> do bloco <b>&lt;enderDest&gt;</b>. Para melhorar a precisão da rota no Maps, também usamos bairro/cidade/UF do mesmo bloco por baixo dos panos — a coluna de endereço mostra a versão resumida.</p>
+    <p class="note">O endereço é montado a partir de <b>xLgr</b> + <b>nro</b> + <b>CEP</b> do bloco <b>&lt;enderDest&gt;</b>. Para melhorar a precisão da rota no Maps, também usamos bairro/cidade/UF do mesmo bloco por baixo dos panos — a coluna de endereço mostra a versão resumida. <b>No iPhone</b>, o Safari não permite selecionar uma pasta inteira: o botão abrirá o seletor de arquivos normal — basta marcar todos os XMLs desejados de uma vez.</p>
   </section>
 
   <div class="table-wrap">
@@ -194,7 +211,7 @@
           <th>Parada</th>
           <th>Nº NF</th>
           <th>Chave de acesso</th>
-          <th>XML (meudanfe.com.br)</th>
+          <th>XML (fsist.com.br)</th>
           <th>Endereço do destinatário</th>
           <th></th>
         </tr>
@@ -336,16 +353,17 @@
   }
 
   function openDanfe(chave){
-    // O meudanfe.com.br não expõe (até onde encontramos) um parâmetro de URL
-    // documentado para pré-preencher o campo "Chave de Acesso". Como alternativa
-    // prática, copiamos a chave para a área de transferência e já abrimos o site
-    // — basta colar (Ctrl+V) no campo de busca.
+    // Não encontramos, no fsist.com.br, um parâmetro de URL documentado para
+    // pré-preencher o campo "Digite a chave" (o próprio site orienta usar um
+    // leitor de código de barras USB, que funciona como teclado, digitando
+    // direto no campo em foco). Como alternativa no navegador, copiamos a
+    // chave para a área de transferência e já abrimos o site — basta colar.
     navigator.clipboard.writeText(chave).then(() => {
-      toast('Chave copiada — cole (Ctrl+V) no campo "Chave de Acesso" do site.', 'ok');
+      toast('Chave copiada — cole (Ctrl+V) no campo "Digite a chave" do site.', 'ok');
     }).catch(() => {
       toast('Não foi possível copiar automaticamente. Copie a chave manualmente.', 'err');
     });
-    window.open('https://meudanfe.com.br/', '_blank', 'noopener');
+    window.open('https://www.fsist.com.br/', '_blank', 'noopener');
   }
 
   /** ---------- beep ---------- **/
@@ -441,6 +459,23 @@
   /** ---------- scanner ---------- **/
   els.btnScan.addEventListener('click', async () => {
     if(scanning) return;
+
+    if(!window.isSecureContext){
+      els.scannerBox.classList.add('open');
+      els.scanStatus.textContent = 'Câmera bloqueada: este arquivo não está sendo aberto por HTTPS.';
+      setPulse('err');
+      showWarn('No celular, o navegador só libera a câmera em páginas HTTPS (ou localhost). Se você abriu o arquivo direto do armazenamento (file://), hospede-o em algum lugar com HTTPS — por exemplo GitHub Pages, Netlify, Vercel, ou um servidor próprio — e acesse por esse endereço.');
+      toast('Câmera exige HTTPS neste dispositivo.', 'err');
+      return;
+    }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      els.scannerBox.classList.add('open');
+      els.scanStatus.textContent = 'Este navegador não expõe acesso à câmera (getUserMedia indisponível).';
+      setPulse('err');
+      toast('Navegador sem suporte a câmera. Tente Chrome ou Safari atualizados.', 'err');
+      return;
+    }
+
     try{
       audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
       if(audioCtx.state === 'suspended') audioCtx.resume();
