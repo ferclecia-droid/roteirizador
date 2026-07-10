@@ -353,17 +353,23 @@
   }
 
   function openDanfe(chave){
-    // Não encontramos, no fsist.com.br, um parâmetro de URL documentado para
-    // pré-preencher o campo "Digite a chave" (o próprio site orienta usar um
-    // leitor de código de barras USB, que funciona como teclado, digitando
-    // direto no campo em foco). Como alternativa no navegador, copiamos a
-    // chave para a área de transferência e já abrimos o site — basta colar.
-    navigator.clipboard.writeText(chave).then(() => {
-      toast('Chave copiada — cole (Ctrl+V) no campo "Digite a chave" do site.', 'ok');
-    }).catch(() => {
-      toast('Não foi possível copiar automaticamente. Copie a chave manualmente.', 'err');
-    });
-    window.open('https://www.fsist.com.br/', '_blank', 'noopener');
+    // Cria um formulário invisível de forma dinâmica para fazer o disparo via POST para o FSist
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'https://www.fsist.com.br/';
+    form.target = '_blank';
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'chave';
+    input.value = chave.replace(/\D/g, ''); // Garante que apenas números puros sejam enviados
+
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+
+    toast('Redirecionando para o FSist...', 'ok');
   }
 
   /** ---------- beep ---------- **/
@@ -529,7 +535,7 @@
       scanning = true;
       lastActivity = Date.now();
       setPulse('active');
-      els.scanStatus.textContent = 'Câmera ativa — aponte para o código de barras da DANFE.';
+      els.scanStatus.textContent = 'Câmera active — aponte para o código de barras da DANFE.';
       startTipRotation();
     }catch(err){
       els.scanStatus.textContent = 'Não foi possível acessar a câmera: ' + (err.message || err);
