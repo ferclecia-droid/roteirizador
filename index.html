@@ -4,16 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Leitor DANFE & Roteirizador Mobile</title>
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" type="text/javascript"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 15px; background-color: #f4f4f9; color: #333; -webkit-text-size-adjust: 100%; }
         h1 { color: #0056b3; font-size: 22px; text-align: center; }
         h2 { color: #333; font-size: 16px; margin-top: 20px; }
-        .btn { background-color: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; margin: 5px 0; display: block; width: 100%; text-align: center; box-sizing: border-box; }
+        .btn { background-color: #007bff; color: white; padding: 14px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; margin: 5px 0; display: block; width: 100%; text-align: center; box-sizing: border-box; font-weight: bold; }
         .btn:active { opacity: 0.8; }
-        .btn-scan { background-color: #f39c12; font-weight: bold; }
-        .btn-maps { background-color: #28a745; font-weight: bold; margin-top: 20px; }
-        #reader { width: 100%; max-width: 100%; margin: 15px 0; border: 2px solid #007bff; border-radius: 8px; overflow: hidden; display: none; background-color: #000; }
+        .btn-scan { background-color: #f39c12; }
+        .btn-maps { background-color: #28a745; margin-top: 20px; }
+        
+        /* Container da câmera ajustado */
+        #reader-wrapper { width: 100%; max-width: 100%; margin: 15px 0; display: none; position: relative; }
+        #reader { width: 100%; border: 2px solid #007bff; border-radius: 8px; overflow: hidden; background-color: #000; }
+        
+        /* Linha vermelha guia para ajudar a alinhar o código de barras comprido */
+        .laser-line { position: absolute; top: 50%; left: 5%; width: 90%; height: 2px; background-color: red; box-shadow: 0 0 8px red; z-index: 10; pointer-events: none; }
+        
         .file-input-wrapper { margin: 15px 0; }
         .table-responsive { width: 100%; overflow-x: auto; margin-top: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border-radius: 6px; }
         table { width: 100%; border-collapse: collapse; background: white; min-width: 500px; }
@@ -28,7 +35,10 @@
     
     <h2>1. Escanear Código de Barras</h2>
     <button id="btnIniciarCamera" class="btn btn-scan" onclick="alternarCamera()">Iniciar Câmera</button>
-    <div id="reader"></div>
+    <div id="reader-wrapper">
+        <div class="laser-line"></div>
+        <div id="reader"></div>
+    </div>
     
     <h2>2. Selecionar Pasta ou Arquivos XML</h2>
     <div class="file-input-wrapper">
@@ -60,48 +70,59 @@
         let html5Qrcode = null;
         let cameraAtiva = false;
 
-        // --- 1. CONTROLE DA CÂMERA EM DISPOSITIVOS MÓVEIS ---
         function alternarCamera() {
-            const readerDiv = document.getElementById("reader");
+            const wrapperDiv = document.getElementById("reader-wrapper");
             const btn = document.getElementById("btnIniciarCamera");
 
             if (!html5Qrcode) {
-                html5Qrcode = new Html5Qrcode("reader");
+                // Instancia especificando estritamente os formatos aceitos para otimizar processamento
+                html5Qrcode = new Html5Qrcode("reader", { 
+                    verbose: false,
+                    formatsToSupport: [ Html5QrcodeSupportedFormats.CODE_128 ]
+                });
             }
 
             if (!cameraAtiva) {
-                readerDiv.style.display = "block";
+                wrapperDiv.style.display = "block";
                 btn.innerText = "Parar Câmera";
                 btn.style.backgroundColor = "#e74c3c";
 
-                // Ajustes de foco e tamanho responsivo para telas de celular
+                // Configurações críticas para códigos de barras longos (CODE128 de 44 dígitos)
                 const config = { 
-                    fps: 15, 
+                    fps: 20, // Aumentado para processar mais frames por segundo
                     qrbox: function(viewfinderWidth, viewfinderHeight) {
-                        // Cria uma tarja horizontal de leitura adaptável ao tamanho da tela do celular
-                        return { width: Math.floor(viewfinderWidth * 0.85), height: 120 };
+                        // Cria uma área de leitura bem larga e fina, ideal para o código da DANFE
+                        return { 
+                            width: Math.floor(viewfinderWidth * 0.9), 
+                            height: Math.floor(viewfinderHeight * 0.3) 
+                        };
                     },
-                    formatsToSupport: [ Html5QrcodeSupportedFormats.CODE_128 ]
+                    // Força resoluções maiores se o celular suportar, ajudando no foco de linhas finas
+                    videoConstraints: {
+                        facingMode: "environment",
+                        aspectRatio: { ideal: 1.7777777778 },
+                        width: { min: 640, ideal: 1280, max: 1920 },
+                        height: { min: 480, ideal: 720, max: 1080 }
+                    }
                 };
 
-                // 'facingMode: "environment"' força o uso da câmera TRASEIRA do celular
                 html5Qrcode.start(
                     { facingMode: "environment" }, 
                     config, 
                     (decodedText) => {
+                        // Limpa qualquer caractere não numérico
                         const chave = decodedText.replace(/\D/g, '');
                         if (chave.length === 44) {
                             adicionarChaveNaTabela(chave);
-                            // Opcional: emitir uma pequena vibração no celular ao ler com sucesso
-                            if (navigator.vibrate) navigator.vibrate(100);
+                            if (navigator.vibrate) navigator.vibrate(100); // Vibra ao ler
                         }
                     },
-                    (errorMessage) => { /* Silencioso */ }
+                    (errorMessage) => { /* Silencioso para não travar desempenho */ }
                 ).then(() => {
                     cameraAtiva = true;
                 }).catch(err => {
                     console.error(err);
-                    alert("Erro de permissão: Certifique-se de que está usando HTTPS e deu permissão à câmera.");
+                    alert("Erro ao acessar a câmera. Verifique as permissões de privacidade.");
                     resetarBotaoCamera();
                 });
 
@@ -113,15 +134,15 @@
         }
 
         function resetarBotaoCamera() {
-            const readerDiv = document.getElementById("reader");
+            const wrapperDiv = document.getElementById("reader-wrapper");
             const btn = document.getElementById("btnIniciarCamera");
-            readerDiv.style.display = "none";
+            wrapperDiv.style.display = "none";
             btn.innerText = "Iniciar Câmera";
             btn.style.backgroundColor = "#f39c12";
             cameraAtiva = false;
         }
 
-        // --- 2. GERENCIAMENTO DA TABELA ---
+        // --- GERENCIAMENTO DA TABELA ---
         function adicionarChaveNaTabela(chave) {
             if (notasFiscais[chave]) return; 
 
@@ -142,7 +163,6 @@
 
             Object.values(notasFiscais).forEach(nota => {
                 const tr = document.createElement("tr");
-                
                 tr.innerHTML = `
                     <td><strong>${nota.numNF}</strong></td>
                     <td>${nota.endereco}</td>
@@ -153,11 +173,10 @@
             });
         }
 
-        // --- 3. PROCESSAMENTO SEGURO DE ARQUIVOS (LIDA COM 'content://') ---
+        // --- PROCESSAMENTO DE ARQUIVOS XML ---
         function processarXMLs(files) {
             if (!files || files.length === 0) return;
 
-            // Filtra os arquivos de forma abrangente (por extensão ou tipo MIME retornado pelo Android)
             const xmlFiles = Array.from(files).filter(file => {
                 return file.name.toLowerCase().endsWith('.xml') || file.type === "text/xml";
             });
@@ -166,12 +185,8 @@
 
             xmlFiles.forEach(file => {
                 const reader = new FileReader();
-                // O FileReader resolve a URI interna 'content://' nativamente no navegador do celular
                 reader.onload = function(e) {
                     parserXML(e.target.result);
-                };
-                reader.onerror = function(err) {
-                    console.error("Erro ao ler arquivo da memória do celular:", err);
                 };
                 reader.readAsText(file);
             });
@@ -192,7 +207,6 @@
 
             if (chaveNode) {
                 const chave = chaveNode.textContent.trim();
-                
                 if (notasFiscais[chave]) {
                     const enderDest = xmlDoc.getElementsByTagName("enderDest")[0];
                     if (enderDest) {
@@ -207,7 +221,7 @@
             }
         }
 
-        // --- 4. ROTA INTELIGENTE (ABRE DIRETO NO APLICATIVO DO MAPS SE INSTALADO) ---
+        // --- ROTA GOOGLE MAPS ---
         function gerarRotaMaps() {
             const enderecosValidos = Object.values(notasFiscais)
                 .map(nota => nota.endereco)
@@ -218,10 +232,8 @@
                 return;
             }
 
-            // URL universal adaptada para disparar o aplicativo nativo do Google Maps no celular (iOS/Android)
             const urlBase = "https://www.google.com/maps/dir/";
             const destinosParam = enderecosValidos.map(end => encodeURIComponent(end)).join("/");
-            
             window.open(`${urlBase}${destinosParam}`, '_blank');
         }
     </script>
