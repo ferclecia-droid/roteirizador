@@ -201,7 +201,7 @@
     </button>
     <input type="file" id="folderInput" webkitdirectory directory multiple hidden accept=".xml">
     <div id="folderStatus"></div>
-    <p class="note">O endereço é montado a partir de <b>xLgr</b> + <b>nro</b> + <b>CEP</b> do bloco <b>&lt;enderDest&gt;</b>. Para melhorar a precisão da rota no Maps, também usamos bairro/cidade/UF do mesmo bloco por baixo dos panos — a coluna de endereço mostra a versão resumida. <b>No iPhone</b>, o Safari não permite selecionar uma pasta inteira: o botão abrirá o seletor de arquivos normal — basta marcar todos os XMLs desejados de uma vez.</p>
+    <p class="note">O endereço é montado a partir de <b>xLgr</b> + <b>nro</b> + <b>CEP</b> do bloco <b><enderDest></b>. Para melhorar a precisão da rota no Maps, também usamos bairro/cidade/UF do mesmo bloco por baixo dos panos — a coluna de endereço mostra a versão resumida. <b>No iPhone</b>, o Safari não permite selecionar uma pasta inteira: o botão abrirá o seletor de arquivos normal — basta marcar todos os XMLs desejados de uma vez.</p>
   </section>
 
   <div class="table-wrap">
@@ -211,7 +211,7 @@
           <th>Parada</th>
           <th>Nº NF</th>
           <th>Chave de acesso</th>
-          <th>XML (fsist.com.br)</th>
+          <th>XML (DANFEOnline)</th>
           <th>Endereço do destinatário</th>
           <th></th>
         </tr>
@@ -239,7 +239,6 @@
   "use strict";
 
   /** ---------- state ---------- **/
-  // entry: { id, chave, nNF, xLgr, nro, cep, bairro, mun, uf, addrLoaded }
   let entries = [];
   let html5QrCode = null;
   let scanning = false;
@@ -272,9 +271,8 @@
     toast._t = setTimeout(()=> els.toast.classList.remove('show'), 2600);
   }
 
-  // Chave de acesso NFe (44 dígitos): cUF(2) AAMM(4) CNPJ(14) mod(2) serie(3) nNF(9) tpEmis(1) cNF(8) cDV(1)
   function nfFromChave(chave){
-    const nNFraw = chave.substring(25, 34); // positions 26-34 (1-indexed)
+    const nNFraw = chave.substring(25, 34);
     const n = parseInt(nNFraw, 10);
     return isNaN(n) ? nNFraw : String(n);
   }
@@ -353,23 +351,13 @@
   }
 
   function openDanfe(chave){
-    // Cria um formulário invisível de forma dinâmica para fazer o disparo via POST para o FSist
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = 'https://www.fsist.com.br/';
-    form.target = '_blank';
-
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'chave';
-    input.value = chave.replace(/\D/g, ''); // Garante que apenas números puros sejam enviados
-
-    form.appendChild(input);
-    document.body.appendChild(form);
-    form.submit();
-    document.body.removeChild(form);
-
-    toast('Redirecionando para o FSist...', 'ok');
+    // O DANFEOnline aceita a injeção direta de chaves de acesso NFe na URL de consulta pública.
+    // Carrega perfeitamente e de forma limpa em navegadores para smartphone.
+    var numChave = chave.replace(/\D/g, '');
+    var urlFinal = "https://www.danfeonline.com.br/Home/ConsultaAvançada?chave=" + numChave;
+    
+    window.open(urlFinal, '_blank');
+    toast('A abrir DANFEOnline...', 'ok');
   }
 
   /** ---------- beep ---------- **/
@@ -389,7 +377,7 @@
       gain.connect(audioCtx.destination);
       osc.start();
       osc.stop(audioCtx.currentTime + 0.17);
-    }catch(e){ /* áudio indisponível, ignora silenciosamente */ }
+    }catch(e){ }
   }
 
   function addChave(chaveRaw){
@@ -397,8 +385,6 @@
     const chave = (chaveRaw.match(/\d{44}/) || [])[0];
 
     if(!chave){
-      // Algo foi lido, mas não tem 44 dígitos numéricos válidos: provavelmente
-      // o código está cortado, sujo, ou a leitura pegou só uma parte dele.
       return { ok:false, reason:'incomplete', digitsFound: digits.length };
     }
     if(entries.some(e => e.chave === chave)){
@@ -416,7 +402,7 @@
     return { ok:true, chave };
   }
 
-  /** ---------- scanner feedback (pulse, tips, incomplete-read warning) ---------- **/
+  /** ---------- scanner feedback ---------- **/
   const SCAN_TIPS = [
     'Sem leitura? Aproxime devagar até o código encher a caixa de leitura.',
     'Verifique o foco: afaste um pouco e deixe a câmera estabilizar antes de aproximar de novo.',
@@ -431,7 +417,7 @@
   let noReadStreak = 0;
   let warnClearTimer = null;
 
-  function setPulse(state){ // 'active' | 'ok' | 'err' | ''
+  function setPulse(state){
     els.pulseDot.className = 'pulse-dot' + (state ? ' ' + state : '');
   }
 
@@ -447,7 +433,6 @@
     tipIndex = 0;
     lastActivity = Date.now();
     tipTimer = setInterval(() => {
-      // só mostra dicas se estiver tentando ler há um tempo sem sucesso
       const idleMs = Date.now() - lastActivity;
       if(scanning && idleMs > 3500){
         els.scanTip.textContent = '💡 ' + SCAN_TIPS[tipIndex % SCAN_TIPS.length];
@@ -502,7 +487,6 @@
         { facingMode: "environment" },
         { fps: 12, qrbox: { width: 300, height: 130 } },
         (decodedText) => {
-          // algo foi decodificado neste frame
           lastActivity = Date.now();
           const result = addChave(decodedText);
           if(result.ok){
@@ -523,9 +507,6 @@
           }
         },
         () => {
-          // frame processado sem nenhum código detectado — sinal de que está tentando ler.
-          // não atualiza lastActivity aqui: é justamente esse tempo parado sem sucesso
-          // que dispara a rotação de dicas.
           if(scanning){
             setPulse('active');
             els.scanStatus.textContent = 'Procurando código de barras…';
@@ -535,7 +516,7 @@
       scanning = true;
       lastActivity = Date.now();
       setPulse('active');
-      els.scanStatus.textContent = 'Câmera active — aponte para o código de barras da DANFE.';
+      els.scanStatus.textContent = 'Câmera ativa — aponte para o código de barras da DANFE.';
       startTipRotation();
     }catch(err){
       els.scanStatus.textContent = 'Não foi possível acessar a câmera: ' + (err.message || err);
