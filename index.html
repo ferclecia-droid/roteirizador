@@ -61,7 +61,29 @@
   }
   #scannerBox.open{display:flex;}
   #reader{width:100%; border-radius:8px; overflow:hidden; background:#000;}
-  .scan-status{font-size:12.5px; color:var(--text-dim); font-family:var(--mono);}
+  .scan-status{font-size:12.5px; color:var(--text-dim); font-family:var(--mono); display:flex; align-items:center; gap:8px;}
+  .pulse-dot{
+    width:8px; height:8px; border-radius:50%; background:var(--text-dim); flex:none;
+  }
+  .pulse-dot.active{background:var(--accent); animation:pulse 1.1s ease-in-out infinite;}
+  .pulse-dot.ok{background:var(--ok); animation:none;}
+  .pulse-dot.err{background:var(--danger); animation:none;}
+  @keyframes pulse{
+    0%,100%{opacity:1; transform:scale(1);}
+    50%{opacity:.35; transform:scale(.7);}
+  }
+  .scan-tip{
+    font-size:12px; color:var(--accent); background:rgba(242,183,5,.08);
+    border:1px solid var(--accent-dim); border-radius:7px; padding:8px 10px;
+    min-height:14px; display:none;
+  }
+  .scan-tip.show{display:block;}
+  .scan-warn{
+    font-size:12px; color:var(--danger); background:rgba(217,97,79,.08);
+    border:1px solid var(--danger); border-radius:7px; padding:8px 10px;
+    display:none;
+  }
+  .scan-warn.show{display:block;}
 
   #folderStatus{font-size:12px; color:var(--text-dim); padding-left:2px;}
 
@@ -146,7 +168,9 @@
 
     <div id="scannerBox">
       <div id="reader"></div>
-      <div class="scan-status" id="scanStatus">Iniciando câmera…</div>
+      <div class="scan-status"><span class="pulse-dot" id="pulseDot"></span><span id="scanStatus">Iniciando câmera…</span></div>
+      <div class="scan-tip" id="scanTip"></div>
+      <div class="scan-warn" id="scanWarn"></div>
       <button class="btn ghost" id="btnStopScan">Parar câmera</button>
     </div>
 
@@ -207,6 +231,9 @@
     scannerBox: document.getElementById('scannerBox'),
     btnStopScan: document.getElementById('btnStopScan'),
     scanStatus: document.getElementById('scanStatus'),
+    pulseDot: document.getElementById('pulseDot'),
+    scanTip: document.getElementById('scanTip'),
+    scanWarn: document.getElementById('scanWarn'),
     btnFolder: document.getElementById('btnFolder'),
     folderInput: document.getElementById('folderInput'),
     folderStatus: document.getElementById('folderStatus'),
@@ -305,14 +332,16 @@
   }
 
   function addChave(chaveRaw){
+    const digits = (chaveRaw.match(/\d+/g) || []).join('');
     const chave = (chaveRaw.match(/\d{44}/) || [])[0];
+
     if(!chave){
-      toast('Código lido não corresponde a uma chave de 44 dígitos.', 'err');
-      return;
+      // Algo foi lido, mas não tem 44 dígitos numéricos válidos: provavelmente
+      // o código está cortado, sujo, ou a leitura pegou só uma parte dele.
+      return { ok:false, reason:'incomplete', digitsFound: digits.length };
     }
     if(entries.some(e => e.chave === chave)){
-      toast('Essa nota já está na lista.', 'err');
-      return;
+      return { ok:false, reason:'duplicate' };
     }
     entries.push({
       id: chave + '-' + Date.now(),
@@ -323,6 +352,53 @@
     });
     render();
     toast('NF ' + nfFromChave(chave) + ' adicionada.', 'ok');
+    return { ok:true, chave };
+  }
+
+  /** ---------- scanner feedback (pulse, tips, incomplete-read warning) ---------- **/
+  const SCAN_TIPS = [
+    'Sem leitura? Aproxime devagar até o código encher a caixa de leitura.',
+    'Verifique o foco: afaste um pouco e deixe a câmera estabilizar antes de aproximar de novo.',
+    'O código de barras é linear (listras) — mantenha o papel reto, sem inclinar o celular.',
+    'Garanta que o código inteiro (com as margens brancas) caiba dentro da área marcada.',
+    'Luz baixa ou reflexo no papel atrapalham — tente uma área bem iluminada e sem brilho.',
+    'Papel amassado ou dobrado sobre o código pode cortar a leitura — alise a área antes de escanear.'
+  ];
+  let tipTimer = null;
+  let tipIndex = 0;
+  let lastActivity = 0;
+  let noReadStreak = 0;
+  let warnClearTimer = null;
+
+  function setPulse(state){ // 'active' | 'ok' | 'err' | ''
+    els.pulseDot.className = 'pulse-dot' + (state ? ' ' + state : '');
+  }
+
+  function showWarn(msg){
+    els.scanWarn.textContent = msg;
+    els.scanWarn.classList.add('show');
+    clearTimeout(warnClearTimer);
+    warnClearTimer = setTimeout(() => els.scanWarn.classList.remove('show'), 3200);
+  }
+
+  function startTipRotation(){
+    stopTipRotation();
+    tipIndex = 0;
+    lastActivity = Date.now();
+    tipTimer = setInterval(() => {
+      // só mostra dicas se estiver tentando ler há um tempo sem sucesso
+      const idleMs = Date.now() - lastActivity;
+      if(scanning && idleMs > 3500){
+        els.scanTip.textContent = '💡 ' + SCAN_TIPS[tipIndex % SCAN_TIPS.length];
+        els.scanTip.classList.add('show');
+        tipIndex++;
+      }
+    }, 4000);
+  }
+  function stopTipRotation(){
+    clearInterval(tipTimer);
+    tipTimer = null;
+    els.scanTip.classList.remove('show');
   }
 
   /** ---------- scanner ---------- **/
@@ -330,6 +406,7 @@
     if(scanning) return;
     els.scannerBox.classList.add('open');
     els.scanStatus.textContent = 'Iniciando câmera…';
+    setPulse('');
     try{
       html5QrCode = new Html5Qrcode("reader", {
         formatsToSupport: [
@@ -343,15 +420,43 @@
         { facingMode: "environment" },
         { fps: 12, qrbox: { width: 300, height: 130 } },
         (decodedText) => {
-          els.scanStatus.textContent = 'Código lido: ' + decodedText.slice(0,20) + '…';
-          addChave(decodedText);
+          // algo foi decodificado neste frame
+          lastActivity = Date.now();
+          const result = addChave(decodedText);
+          if(result.ok){
+            setPulse('ok');
+            els.scanStatus.textContent = 'Nota adicionada: NF ' + nfFromChave(result.chave) + '. Continue escaneando ou pare a câmera.';
+            els.scanTip.classList.remove('show');
+            noReadStreak = 0;
+            setTimeout(() => { if(scanning) setPulse('active'); }, 900);
+          } else if(result.reason === 'incomplete'){
+            noReadStreak++;
+            setPulse('err');
+            showWarn(`Código capturado parece incompleto ou cortado (${result.digitsFound} dígito${result.digitsFound===1?'':'s'} de 44 esperados). Reaproxime e centralize o código inteiro na caixa de leitura.`);
+            els.scanStatus.textContent = 'Lendo… captura incompleta, ajuste o enquadramento.';
+            setTimeout(() => { if(scanning) setPulse('active'); }, 1200);
+          } else if(result.reason === 'duplicate'){
+            els.scanStatus.textContent = 'Essa nota já está na lista — aponte para a próxima.';
+          }
         },
-        () => { /* frame sem leitura, ignora */ }
+        () => {
+          // frame processado sem nenhum código detectado — sinal de que está tentando ler.
+          // não atualiza lastActivity aqui: é justamente esse tempo parado sem sucesso
+          // que dispara a rotação de dicas.
+          if(scanning){
+            setPulse('active');
+            els.scanStatus.textContent = 'Procurando código de barras…';
+          }
+        }
       );
       scanning = true;
+      lastActivity = Date.now();
+      setPulse('active');
       els.scanStatus.textContent = 'Câmera ativa — aponte para o código de barras da DANFE.';
+      startTipRotation();
     }catch(err){
       els.scanStatus.textContent = 'Não foi possível acessar a câmera: ' + (err.message || err);
+      setPulse('err');
       toast('Erro ao acessar a câmera. Verifique as permissões.', 'err');
     }
   });
@@ -362,6 +467,9 @@
       try{ await html5QrCode.stop(); await html5QrCode.clear(); }catch(e){}
     }
     scanning = false;
+    setPulse('');
+    stopTipRotation();
+    els.scanWarn.classList.remove('show');
     els.scannerBox.classList.remove('open');
   }
 
@@ -469,4 +577,3 @@
 </script>
 </body>
 </html>
-
